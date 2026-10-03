@@ -95,32 +95,36 @@ function createId() {
 }
 
 function normalizeWorkflow(item) {
+  item = item && typeof item === "object" && !Array.isArray(item) ? item : {};
+  const text = (value, fallback = "") => typeof value === "string" ? value.slice(0, 4000) : fallback;
+  const choice = (value, values, fallback) => values.includes(value) ? value : fallback;
+  const hours = Number(item.hours);
   return {
-    id: item.id || createId(),
-    name: item.name || "Untitled workflow",
-    problem: item.problem || "",
-    process: item.process || "",
-    idea: item.idea || "",
-    nextStep: item.nextStep || "Review and define next action",
-    category: item.category || "Operations Tool",
-    status: item.status || "Idea",
-    impact: item.impact || "Medium",
-    hours: Number(item.hours || 0),
+    id: text(item.id, createId()).slice(0, 128),
+    name: text(item.name, "Untitled workflow"),
+    problem: text(item.problem), process: text(item.process), idea: text(item.idea),
+    nextStep: text(item.nextStep, "Review and define next action"),
+    category: choice(item.category, ["AI Assistant", "Data Dashboard", "API Integration", "Operations Tool"], "Operations Tool"),
+    status: choice(item.status, ["Idea", "Build", "Live"], "Idea"),
+    impact: choice(item.impact, ["High", "Medium", "Low"], "Medium"),
+    hours: Number.isFinite(hours) ? Math.max(0, Math.min(hours, 168)) : 0,
   };
 }
 
 function loadWorkflows() {
-  const stored = localStorage.getItem(STORAGE_KEY);
+  let stored;
+  try { stored = localStorage.getItem(STORAGE_KEY); } catch { return seedWorkflows.map(normalizeWorkflow); }
   if (!stored) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(seedWorkflows));
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(seedWorkflows)); } catch { /* storage unavailable */ }
     return seedWorkflows.map(normalizeWorkflow);
   }
 
   try {
+    if (stored.length > 2 * 1024 * 1024) return seedWorkflows.map(normalizeWorkflow);
     const parsed = JSON.parse(stored);
     if (!Array.isArray(parsed)) return seedWorkflows.map(normalizeWorkflow);
 
-    const normalized = parsed.map(normalizeWorkflow);
+    const normalized = parsed.slice(0, 1000).map(normalizeWorkflow);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(normalized));
     return normalized;
   } catch {
@@ -129,7 +133,7 @@ function loadWorkflows() {
 }
 
 function saveWorkflows() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(workflows));
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(workflows)); } catch { /* session remains usable */ }
 }
 
 function countBy(field) {
@@ -184,7 +188,7 @@ function renderRows() {
       <td>
         <div class="workflow-name">${escapeHtml(item.name)}</div>
         <div class="workflow-detail">${escapeHtml(detail)}</div>
-        <div class="muted">ID ${item.id.slice(0, 8)}</div>
+        <div class="muted">ID ${escapeHtml(item.id.slice(0, 8))}</div>
       </td>
       <td>${escapeHtml(item.category)}</td>
       <td><span class="pill ${item.status}">${item.status}</span></td>
@@ -192,7 +196,7 @@ function renderRows() {
       <td>${Number(item.hours || 0)}h</td>
       <td><span class="priority-score">${getPriorityScore(item)}</span></td>
       <td>${escapeHtml(item.nextStep)}</td>
-      <td><button class="delete-button" type="button" data-delete="${item.id}">Delete</button></td>
+      <td><button class="delete-button" type="button" data-delete="${escapeHtml(item.id)}">Delete</button></td>
     `;
     rowsEl.appendChild(row);
   });
@@ -325,7 +329,7 @@ function exportCsv() {
   ]);
 
   const csv = [headers, ...rows]
-    .map((row) => row.map((value) => `"${String(value ?? "").replaceAll('"', '""')}"`).join(","))
+    .map((row) => row.map(csvCell).join(","))
     .join("\n");
 
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
@@ -348,6 +352,13 @@ function roundRect(ctx, x, y, width, height, radius) {
   ctx.arcTo(x, y + height, x, y, safeRadius);
   ctx.arcTo(x, y, x + width, y, safeRadius);
   ctx.closePath();
+}
+
+function csvCell(value) {
+  let text = String(value ?? "");
+  // CSV quotes are syntax, not a spreadsheet formula boundary.
+  if (typeof value === "string" && /^[\s\u0000-\u001f]*[=+@-]/.test(text)) text = "'" + text;
+  return '"' + text.replaceAll('"', '""') + '"';
 }
 
 function escapeHtml(value) {
@@ -382,6 +393,7 @@ form.addEventListener("submit", (event) => {
     hours: Number(formData.get("hours") || 0),
   });
 
+  if (workflows.length >= 1000) { window.alert("Limit: 1000 workflows. Export and remove old items first."); return; }
   workflows = [newWorkflow, ...workflows];
   saveWorkflows();
   form.reset();
